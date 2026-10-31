@@ -5,6 +5,7 @@ using Domain.Services;
 using Domain.ValueObjects;
 using FluentAssertions;
 using MockQueryable.Moq;
+using Microsoft.EntityFrameworkCore.Storage;
 using Moq;
 
 namespace Application.UnitTests.Bookings.Commands
@@ -17,10 +18,13 @@ namespace Application.UnitTests.Bookings.Commands
         private readonly Mock<IBookingDbContext> _contextMock;
         private readonly Mock<IRentalPricingService> _pricingServiceMock;
         private readonly CreateBookingCommandHandler _handler;
+        private readonly Mock<IDbContextTransaction> _transactionMock = new();
 
         public CreateBookingCommandHandlerTests()
         {
             _contextMock = new Mock<IBookingDbContext>();
+            _contextMock.Setup(c => c.BeginRoomBookingAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(_transactionMock.Object);
             _pricingServiceMock = new Mock<IRentalPricingService>();
 
             _handler = new CreateBookingCommandHandler(
@@ -71,6 +75,8 @@ namespace Application.UnitTests.Bookings.Commands
             _pricingServiceMock.Verify(p => p.CalculateRoomCost(room.BaseHourlyRate, slot), Times.Once);
             _contextMock.Verify(c => c.Bookings.Add(It.IsAny<Booking>()), Times.Once);
             _contextMock.Verify(c => c.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+            _transactionMock.Verify(t => t.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
+            _transactionMock.Verify(t => t.DisposeAsync(), Times.Once);
         }
 
         [Fact]
@@ -128,6 +134,9 @@ namespace Application.UnitTests.Bookings.Commands
                 .WithMessage("*already booked*");
 
             _contextMock.Verify(c => c.Bookings.Add(It.IsAny<Booking>()), Times.Never);
+            _contextMock.Verify(c => c.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+            _transactionMock.Verify(t => t.CommitAsync(It.IsAny<CancellationToken>()), Times.Never);
+            _transactionMock.Verify(t => t.DisposeAsync(), Times.Once);
         }
     }
 }

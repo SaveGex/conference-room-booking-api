@@ -23,6 +23,12 @@ namespace Domain.Entities
             new() { Id = Guid.NewGuid(), Name = name, Capacity = capacity, BaseHourlyRate = baseRate };
 
         public void UpdateRate(Money newRate) => BaseHourlyRate = newRate;
+        public void UpdateDetails(string name, int capacity, Money baseRate)
+        {
+            Name = name;
+            Capacity = capacity;
+            BaseHourlyRate = baseRate;
+        }
         public void AddService(Guid serviceId)
         {
             if (!_serviceIds.Contains(serviceId)) _serviceIds.Add(serviceId);

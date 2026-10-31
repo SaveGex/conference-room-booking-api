@@ -21,6 +21,8 @@ public class CreateBookingCommandHandler : IRequestHandler<CreateBookingCommand,
 
     public async Task<BookingResponseDTO> Handle(CreateBookingCommand request, CancellationToken cancellationToken)
     {
+        await using var transaction = await _context.BeginRoomBookingAsync(request.roomId, cancellationToken);
+
         // 1. Validate room existence
         var room = await _context.Rooms
             .FirstOrDefaultAsync(r => r.Id == request.roomId, cancellationToken)
@@ -59,6 +61,7 @@ public class CreateBookingCommandHandler : IRequestHandler<CreateBookingCommand,
 
         _context.Bookings.Add(booking);
         await _context.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         return MapToResponseDto(booking);
     }

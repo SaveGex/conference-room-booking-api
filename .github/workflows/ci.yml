@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build, unit, SQL Server and Postman tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: CiOnly_Booking_2026!
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd="/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'CiOnly_Booking_2026!' -C -Q 'SELECT 1' -b"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+          --health-start-period=20s
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      # Credentials belong only to the disposable SQL Server service above.
+      BOOKING_TEST_SQLSERVER: Server=localhost,1433;User Id=sa;Password=CiOnly_Booking_2026!;TrustServerCertificate=true
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Restore
+        run: dotnet restore src/MainWeb.slnx
+      - name: Build
+        run: dotnet build src/MainWeb.slnx -c Release --no-restore
+      - name: Unit tests
+        run: >-
+          dotnet test src/MainWeb.slnx -c Release --no-build
+          --filter 'Category!=Integration'
+          --logger 'trx;LogFilePrefix=unit' --results-directory TestResults
+      - name: SQL Server integration tests
+        run: |
+          test -n "$BOOKING_TEST_SQLSERVER"
+          dotnet test tests/Infrastructure.UnitTests/Infrastructure.UnitTests.csproj -c Release --no-build \
+            --filter 'Category=Integration' --logger 'trx;LogFilePrefix=integration' --results-directory TestResults
+      - name: Build API image
+        run: docker build -f src/MainWeb/Dockerfile -t booking-api:ci .
+      - name: Start API container
+        run: |
+          mkdir -p TestResults
+          docker run -d --name booking-api-ci --network host \
+            -e ASPNETCORE_ENVIRONMENT=Development \
+            -e ASPNETCORE_URLS=http://+:8080 \
+            -e "ConnectionStrings__DefaultConnection=${BOOKING_TEST_SQLSERVER};Database=BookingApiCi" \
+            booking-api:ci
+          for attempt in {1..60}; do
+            if curl --fail --silent http://localhost:8080/swagger/v1/swagger.json > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs booking-api-ci
+          exit 1
+      - name: Postman API tests
+        run: |
+          npm install --global newman@6.2.1
+          newman run 'tests/Postman/Conference Room Booking API.postman_collection.json' \
+            --environment 'tests/Postman/Conference Room Booking API.postman_environment.json' \
+            --env-var baseUrl=http://localhost:8080 \
+            --reporters cli,junit --reporter-junit-export TestResults/postman.xml \
+            --timeout-request 15000 --timeout-script 15000 --timeout 180000 --bail
+      - name: Save verified image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: docker save booking-api:ci | gzip > booking-api.tar.gz
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          name: verified-image
+          path: booking-api.tar.gz
+          retention-days: 7
+      - name: Capture API logs
+        if: always()
+        run: |
+          mkdir -p TestResults
+          docker logs booking-api-ci > TestResults/api.log 2>&1 || true
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults/
+          retention-days: 14
+      - name: Stop API
+        if: always()
+        run: docker rm -f booking-api-ci || true

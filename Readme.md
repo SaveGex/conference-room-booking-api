@@ -1,5 +1,7 @@
 # Conference Room Booking API
 
+[![CI](https://github.com/SaveGex/conference-room-booking-api/actions/workflows/ci.yml/badge.svg)](https://github.com/SaveGex/conference-room-booking-api/actions/workflows/ci.yml)
+
 A C#/.NET 10 REST API built as a technical assignment. It manages conference rooms, bookings and rental pricing.
 
 [Original assignment (Ukrainian)](docs/assignment.uk.md)
@@ -48,10 +50,24 @@ dotnet test src/MainWeb.slnx
 
 Unit tests cover pricing boundaries, booking validation, room operations and reports. They do not require a running SQL Server.
 
+To also run the concurrency tests against SQL Server, set `BOOKING_TEST_SQLSERVER` to a connection string with permission to create databases. Each test creates and removes its own uniquely named database. For Windows LocalDB:
+
+```powershell
+$env:BOOKING_TEST_SQLSERVER = 'Server=(localdb)\MSSQLLocalDB;Integrated Security=true;TrustServerCertificate=true'
+dotnet test src/MainWeb.slnx
+```
+
+Booking creation locks the room with `UPDLOCK, HOLDLOCK` inside a transaction before checking availability and saving. Concurrent requests for the same room wait for that transaction to finish. Any future operation that changes a booking's room or time must follow the same locking protocol.
+
 A [Postman collection](tests/Postman/Conference%20Room%20Booking%20API.postman_collection.json) is also included for manual API checks.
+
+## CI
+
+GitHub Actions builds the solution, runs both unit-test suites and SQL Server concurrency tests, then builds and starts the API container and runs the Postman collection with Newman. Test reports and API logs are available as workflow artifacts.
+
+Successful runs on `main` also save the tested Docker image as the `verified-image` artifact. Download and extract it, then run `docker load -i booking-api.tar.gz` to load `booking-api:ci`. The workflow does not deploy an application server or publish to a container registry.
 
 ## Current limitations
 
-- The overlap check and booking insert are separate operations. Concurrent requests can still create conflicting bookings.
 - Authentication and authorization are not implemented.
 - Database initialization uses `EnsureCreatedAsync`; schema upgrades are not applied automatically.

@@ -19,7 +19,7 @@ namespace Application.Rooms.Commands.UpdateRoom
                 .FirstOrDefaultAsync(r => r.Id == request.Id, cancellationToken)
                 ?? throw new KeyNotFoundException($"Room with ID '{request.Id}' was not found.");
 
-            room.UpdateRate(request.BaseHourlyRate);
+            room.UpdateDetails(request.Name, request.Capacity, request.BaseHourlyRate);
 
             await _context.SaveChangesAsync(cancellationToken);
         }

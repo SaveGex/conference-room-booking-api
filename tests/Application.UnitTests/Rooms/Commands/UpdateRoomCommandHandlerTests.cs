@@ -20,7 +20,7 @@ namespace Application.UnitTests.Rooms.Commands
         }
 
         [Fact]
-        public async Task Handle_ShouldUpdateRoomRate_WhenRoomExists()
+        public async Task Handle_ShouldUpdateRoomDetails_WhenRoomExists()
         {
             // Arrange
             var room = Room.Create("Conference Hall A", 20, new Money(100, "USD"));
@@ -29,13 +29,15 @@ namespace Application.UnitTests.Rooms.Commands
             _contextMock.Setup(c => c.Rooms).Returns(roomsDbSet.Object);
 
             var newRate = new Money(180, "USD");
-            var command = new UpdateRoomCommand(room.Id, "Conference Hall A", 20, newRate);
+            var command = new UpdateRoomCommand(room.Id, "Renamed Hall", 25, newRate);
 
             // Act
             await _handler.Handle(command, CancellationToken.None);
 
             // Assert
             room.BaseHourlyRate.Should().Be(newRate);
+            room.Name.Should().Be("Renamed Hall");
+            room.Capacity.Should().Be(25);
             _contextMock.Verify(c => c.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
         }
 
