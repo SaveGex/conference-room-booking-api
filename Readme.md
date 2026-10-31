@@ -1,190 +1,57 @@
 # Conference Room Booking API
 
-REST API для управління конференц-залами, їх бронюванням та розрахунком вартості оренди з урахуванням часових тарифів.
+A C#/.NET 10 REST API built as a technical assignment. It manages conference rooms, bookings and rental pricing.
 
----
+[Original assignment (Ukrainian)](docs/assignment.uk.md)
 
-## Бізнес-задача
+## What it does
 
-Компанія надає конференц-зали в оренду для бізнесу. API дозволяє:
+- Searches rooms by time slot and capacity.
+- Calculates rental costs across configurable tariff periods, including partial hours and bookings spanning midnight.
+- Stores service names and prices with each booking to preserve its original cost.
+- Provides revenue and room utilization reports.
 
-- реєструвати, редагувати та видаляти зали з переліком доступних послуг (такі як: проєктор, Wi-Fi, звук і т.п.);
-- шукати доступні зали за датою, часом і місткістю;
-- бронювати зал з автоматичним розрахунком вартості оренди;
-- отримувати аналітичні звіти по виручці та завантаженості залів.
+The code is split into Domain, Application, Infrastructure and Web API layers. It uses EF Core with SQL Server, MediatR for commands and queries, and FluentValidation for input validation.
 
-### Ціноутворення (найважливіше бізнес-правило)
+Pricing rules live in [appsettings.json](src/MainWeb/appsettings.json). For example, a booking from 11:00 to 15:00 combines the standard rate with the 12:00-14:00 peak rate.
 
-Вартість оренди залежить не від фіксованої ставки, а від того, на які тарифні періоди потрапляє бронювання:
+## Run locally
 
-| Період      | Коефіцієнт      |
-|-------------|-----------------|
-| 06:00–09:00 | -10% (знижка)   |
-| 09:00–18:00 | базова ставка   |
-| 12:00–14:00 | +15% (націнка, пікові години) |
-| 18:00–23:00 | -20% (знижка)   |
+Requires Docker with Compose and Git. Ports 80, 443 and 14330 must be available.
 
-Якщо бронювання перетинає кілька періодів (наприклад, 11:00–15:00 зачіпає і стандартні, і пікові години), вартість рахується посегментно - кожна година (чи її частка) множиться на свій коефіцієнт, після чого результати підсумовуються. Правила задані в конфігурації (`appsettings.json`, секція `Pricing`), а не захардкоджені - це дозволяє змінювати тарифну сітку без перекомпіляції.
-
----
-
-## Технічні рішення
-
-- **Clean Architecture** - чотири шари (`Domain` <- `Application` <- `Infrastructure` <- `MainWeb`), залежності спрямовані тільки досередини. `Domain` не залежить ні від чого зовнішнього.
-- **DDD** - `Room`, `Booking` - агрегати з фабричними методами (`Room.Create`, `Booking.Create`), що інкапсулюють інваріанти. `Money` і `TimeSlot` - value objects. `Booking` навмисно окремий агрегат від `Room` (посилається на `RoomId`, а не тримає `Room` всередині) - щоб уникнути одного розрослого агрегату і зайвих блокувань при паралельних бронюваннях.
-- **CQRS + MediatR** - кожна операція (`CreateRoom`, `SearchAvailableRooms`, `CreateBooking` тощо) - окремі Command/Query з власним handler і FluentValidation-валідатором, підключеним через `ValidationBehavior` у MediatR pipeline.
-- **Розрахунок вартості** винесений в окремий domain service (`IRentalPricingService`, реалізація в `Infrastructure`), а не розмазаний по хендлеру чи ентіті - це дозволяє тестувати логіку ціноутворення ізольовано (`Infrastructure.UnitTests/Services/RentalPricingServiceTests.cs`).
-- **Захист від подвійного бронювання** - при створенні бронювання перевіряється перетин часових слотів для того самого залу (`Slot.Start < request.slot.End && Slot.End > request.slot.Start`), конфлікт повертає `409 Conflict`.
-- **EF Core + SQL Server** - `BookingDbContext` абстрагований через `IBookingDbContext` в Application-шарі, що дозволяє мокати БД у юніт-тестах без реального EF/SQL.
-- **Глобальна обробка помилок** через `IExceptionHandler` (`GlobalExceptionHandler`) - уніфіковані `ProblemDetails`-відповіді замість "сирих" стектрейсів.
-- **Swagger/OpenAPI** - автогенерована документація з XML-коментарями з Application та MainWeb.
-
----
-
-## Запуск проєкту
-
-### Варіант 1 — Docker Compose (рекомендовано)
-
-#### Автоматично через npm:
-```bash
-npm run up
-```
-#### Після чого можна запустити постман тести:
-```bash
-npm run postman-tests
-```
-#### Мануально:
-```bash
+```sh
+git clone https://github.com/SaveGex/conference-room-booking-api.git
+cd conference-room-booking-api
 cp .env.example .env
 docker compose up --build
 ```
 
-### Варіант 2 - локально через `dotnet run`
+In PowerShell, use `Copy-Item .env.example .env` instead of `cp`.
 
-Потрібен розгорнутий SQL Server (локально або в контейнері) і рядок підключення в `src/MainWeb/appsettings.Development.json`:
+Open [Swagger UI](https://localhost/swagger). Compose starts SQL Server, the API and an Nginx proxy. It generates a self-signed certificate for localhost, so the browser will report it as untrusted. The API creates the database schema and seeds sample rooms and services on first launch.
 
-```json
-"ConnectionStrings": {
-  "DefaultConnection": "Server=.;Database=booking_db;Trusted_Connection=True;MultipleActiveResultSets=true;TrustServerCertificate=True;"
-}
+The credentials in `.env.example` are for local development only.
+
+Stop the containers while keeping database data:
+
+```sh
+docker compose down
 ```
 
-Запуск:
+## Tests
 
-```bash
-dotnet run --project src/MainWeb
+With the .NET 10 SDK installed:
+
+```sh
+dotnet test src/MainWeb.slnx
 ```
 
-### Тести
+Unit tests cover pricing boundaries, booking validation, room operations and reports. They do not require a running SQL Server.
 
-```bash
-dotnet test ./src/MainWeb.slnx
-```
+A [Postman collection](tests/Postman/Conference%20Room%20Booking%20API.postman_collection.json) is also included for manual API checks.
 
-#### Почистити ресурси(бо в мене наприклад тяжко навіть без цього диску :D):
-```bash
-docker compose down -v
-```
+## Current limitations
 
-
-## Структура проєкту
-
-```
-src/
-  Domain/          - сутності, value objects, доменні сервіси (без зовнішніх залежностей)
-  Application/      - CQRS команди/запити, DTO, валідатори, інтерфейси
-  Infrastructure/   - EF Core, реалізації інтерфейсів, RentalPricingService, seed-дані
-  MainWeb/          - контролери, middleware, DIC, Swagger
-tests/
-  Application.UnitTests/     - тести хендлерів commands/queries
-  Infrastructure.UnitTests/  - тести RentalPricingService (сегментація тарифів)
-```
-
-## Аналітичні звіти
-
-Реалізовано два звіти для бізнесу (`GET /api/Reports/...`):
-
-- **RevenueReport** - виручка за період з розбивкою по залах (`RoomRevenueBreakdownDTO`): скільки заробив кожен зал окремо і сумарно.
-- **UtilizationReport** - завантаженість залів за період (`RoomUtilizationDetailsDTO`): скільки годин зал був заброньований і відсоток використання від доступного часу.
-
-## API Endpoints
-
-| Метод | Маршрут | Опис |
-|-------|---------|------|
-| POST  | `/api/Rooms` | Створити зал |
-| PUT   | `/api/Rooms/{id}` | Оновити зал |
-| DELETE| `/api/Rooms/{id}` | Видалити зал |
-| POST  | `/api/Rooms/{id}/services` | Додати послугу залу |
-| GET   | `/api/Rooms/search` | Пошук доступних залів за датою/часом/місткістю |
-| POST  | `/api/Bookings` | Забронювати зал (з розрахунком вартості) |
-| GET   | `/api/Bookings/{id}` | Отримати бронювання за ID |
-| GET   | `/api/Bookings` | Список бронювань з фільтрами |
-| GET   | `/api/Reports/revenue` | Звіт по виручці |
-| GET   | `/api/Reports/utilization` | Звіт по завантаженості залів |
-
-Повна специфікація - у Swagger UI (`/swagger`) після запуску.
-
-
-
-# ТЕСТОВЕ ЗАВДАННЯ: 
-```
-Контекст задачі:
-Ви працюєте в компанії, яка розробляє застосунок для управління бронюванням та
-орендою конференц-залів. Ваше завдання — створити API для управління залами,
-бронюваннями та розрахунку вартості оренди.
-Опис проблеми:
-Компанія надає в оренду конференц-зали для бізнесу. Необхідно розробити просте
-API, яке дозволить клієнтам шукати доступні зали, бронювати їх, а також
-розраховувати вартість оренди залежно від часу та обраних послуг.
-Технічні вимоги:
-API Методи:
-1. Додавання конференц-залу:
-- Вхідні дані: Назва залу (наприклад, "Зал А"), місткість (наприклад, 50 осіб), список
-доступних послуг (наприклад, проєктор, вартість 500 гривень; Wi-Fi, вартість 300
-гривень), базова вартість оренди за годину (наприклад, 2000 гривень).
-- Вихідні дані: Підтвердження успішного створення залу з унікальним ID.
-2. Редагування інформації про зал:
-- Вхідні дані: ID залу, оновлені дані (наприклад, зміна вартості оренди до 2500
-гривень або додавання послуги "Звук", вартість 700 гривень).
-- Вихідні дані: Підтвердження успішного оновлення.
-3. Видалення конференц-залу:
-- Вхідні дані: ID залу.
-- Вихідні дані: Підтвердження видалення.
-4. Пошук доступних залів:
-- Вхідні дані: Дата та час, місткість (наприклад, дата 01.09.2024, час з 10:00 до 14:00,
-місткість 50 осіб).
-- Вихідні дані: Список доступних залів.
-5. Бронювання залу:
-- Вхідні дані: ID залу, дата і час бронювання, тривалість, обрані послуги.
-- Вихідні дані: Підтвердження бронювання з розрахунком загальної вартості оренди.
-Початкові дані:
-- Зали:
-- Зал А: місткість 50 осіб, базова вартість 2000 гривень за годину.
-- Зал B: місткість 100 осіб, базова вартість 3500 гривень за годину.
-- Зал C: місткість 30 осіб, базова вартість 1500 гривень за годину.
-- Послуги:
-- Проєктор: 500 гривень.
-- Wi-Fi: 300 гривень.
-- Звук: 700 гривень.
-Розрахунок вартості оренди:
-- Вартість оренди залежить від часу бронювання:
-- Стандартні години (з 09:00 до 18:00): базова вартість залу.
-- Вечірні години (з 18:00 до 23:00): знижка 20% на оренду залу.
-- Ранкові години (з 06:00 до 09:00): знижка 10%.
-- Пікові години (з 12:00 до 14:00): націнка 15%.
-Додаткові вимоги:
-1. Чистий код та масштабованість: Використовуйте практики з книги "Чистий
-код" Robert Cecil Martin під час написання рішення. Проєкт в майбутньому буде
-розширюватися, тому важливо, щоб він був масштабованим, безпечним та
-відмовостійким. Забезпечити належний рівень безпеки, щоб уникнути проблем з
-клієнтами, які будуть використовувати API.
-2. Звіти та аналітика: Продумайте і додайте до рішення звіти, які будуть корисні
-для бізнесу.
-Плюсом буде:
-- Заповнений GIT README
-- Коментарі в коді
-- Задокументуйте API за допомогою Swagger.
-Форма здачі:
-- Посилання на репозиторій з кодом.
-- Коротка документація по проєкту з описом бізнес-завдань і технічних рішень.
-```
+- The overlap check and booking insert are separate operations. Concurrent requests can still create conflicting bookings.
+- Authentication and authorization are not implemented.
+- Database initialization uses `EnsureCreatedAsync`; schema upgrades are not applied automatically.
